@@ -2,17 +2,32 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <HTTPClient.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Wire.h>
+
+#define ANCHO_PANTALA 128
+#define ALTURA_PANTALLA 64
+
+#define SDA_PIN 26
+#define SCL_PIN 27
+
+Adafruit_SSD1306 display(ANCHO_PANTALA,ALTURA_PANTALLA,&Wire);
 
 //GPIO 35
 #define VOLTAJE_PIN 32
-#define CORRIENTE_PIN 33
+#define CORRIENTE_PIN 35
 
 const char* ssidLocal = "MEDIDOR_0001";
 const char* contrasenaLocal = "12345678";
+const String nombreDispositivo = "Medidor_0001";
+
+const String urlServer = "http://192.168.113.60:8000/medicion/";
 
 int freqMedida = 1000;
-int voltajeMax = 17600;
-int corrienteMax = 5588;
+int voltajeMax = 18000;
+int corrienteMax = 8588;
 
 int voltajeMedido = 0;
 int corrienteMedida = 0;
@@ -29,30 +44,44 @@ const char* index_html = R"rawliteral(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Document</title>
-    <!--Bootstrap cdn-->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
 </head>
 <body>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-    <h1 class="text-center">
-    Configuracion del medidor</h1>
-    <!--Seccion de configuracion de conexion - debe ser un collapsable-->
     <div class="container">
-        <div class="row card">
-            <div class="col header">
-                <h2 class ="card-header" >Configuracion de conexion</h2>
-                    <form>
-                        <div class="mb-3">
-                            <label for="ssid" class="form-label">SSID</label>
-                            <input type="text" class="form-control" id="ssid" aria-describedby="ssidHelp">
-                            <label for="contraseña" class ="form-label">Contraseña</label>
-                            <input type="password" class="form-control" id="contraseña" aria-describedby="contraseñaHelp">
-                            <button id="btnGuardarRed" class="btn btn-primary">Guardar</button>
-                        </div>
-                    </form>
-            </div>
-        </div>
+        <h1 class="titulo">Configuracion del medidor</h1>
+            <form class="card">
+                    <h2 class = "sub-titulo">Configuración de la red</h2>
+                    <label for="ssid" class="form-label">SSID</label>
+                    <input type="text" class="form-control" id="ssid" aria-describedby="ssidHelp">
+                    <label for="contraseña" class ="form-label">Contraseña</label>
+                    <input type="password" class="form-control" id="contraseña" aria-describedby="contraseñaHelp">
+                    <button id="btnGuardarRed" class="btn btn-primary">Guardar</button>
+            </form>
     </div>
+    <style>
+        .titulo, sub-titulo {
+            text-align: center;
+        }
+        .titulo {
+            font-size: 2.75em;
+        }
+        .container {
+            display: flex;
+            justify-content: start;
+            align-items: center;
+            height: 100vh;
+            flex-direction: column;
+        }
+        .card {
+            width: 50%;
+            background-color: #d2e5fc;
+            border-radius: 15px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+    </style>
     <script>
         document.addEventListener("DOMContentLoaded", function() {
             var ssid = document.getElementById("ssid");
@@ -91,7 +120,7 @@ const char* index_html = R"rawliteral(
 </html>
 )rawliteral";
 
-AsyncWebServer server(80);
+
 
 void realizarMedida(){
   voltajeMedido = analogRead(VOLTAJE_PIN);
@@ -131,6 +160,61 @@ void realizarMedida(){
   }
 }
 
+void imprimirMedida(){
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.print("Potencia: ");
+  display.print(potenciauW/1000);
+  display.print("mW");
+  display.setCursor(0,30);
+  display.print("Consumo: ");
+  if (consumouWh<1000){
+    display.print(consumouWh);
+    display.print("uWh");
+  }
+  else if (consumouWh<1000000){
+    display.print(consumouWh/1000);
+    display.print("mWh");
+  }
+  else if (consumouWh<1000000000){
+    display.print(consumouWh/1000000);
+    display.print("Wh");
+  }
+  else{
+    display.print(consumouWh/1000000000);
+    display.print("kWh");
+  }
+  display.display();
+}
+
+void enviarMedida(){
+  HTTPClient http;
+  http.begin(urlServer);
+  
+  http.addHeader("Content-Type", "application/json");
+  String json = "{\"potencia\":"+String(potenciauW)+",\"consumo\":"+String(consumouWh)+",\"dispositivo\":\""+nombreDispositivo+"\"}";
+  int httpCode = http.POST(json);
+  if (httpCode>0){
+    String payload = http.getString();
+  }
+  else{
+    Serial.println("Error en la peticion");
+  }
+
+  http.end();
+}
+void conectarAInternet(String ssid, String contra){
+  WiFi.begin(ssid, contra);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(1000);
+    Serial.println("Conectando a la red");
+  }
+  Serial.println("Conectado a la red");
+  Serial.println(WiFi.localIP());
+
+}
+
 void iniciarServidor(){
   Serial.println("Iniciando servidor");
   WiFi.softAP(ssidLocal, contrasenaLocal);
@@ -139,6 +223,9 @@ void iniciarServidor(){
   
   Serial.print("IP Address: ");
   Serial.println(IP);
+
+AsyncWebServer server(80);
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     Serial.println("Solicitud de la pagina principal");
     AsyncWebServerResponse *response = request->beginResponse(200, "text/html", index_html);
@@ -149,9 +236,18 @@ void iniciarServidor(){
   });
 }
 void medidaTask(void *pvParameters){
+
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
   while (true)
   {
     realizarMedida();
+    imprimirMedida();
+    if (potenciauW>0){
+      enviarMedida();
+    }
     delay(freqMedida);
   }
   
@@ -162,8 +258,15 @@ void setup() {
   Serial.begin(9600);
   pinMode(VOLTAJE_PIN, INPUT);
   pinMode(CORRIENTE_PIN, INPUT);
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!display.begin(SSD1306_SWITCHCAPVCC,0x3C)){
+    Serial.println(F("Error con pantalla"));
+    for(;;);
+  }
 
-  iniciarServidor();
+  //iniciarServidor();
+  
+  conectarAInternet("Telefonodedani", "aguacate");
   xTaskCreatePinnedToCore(
     medidaTask,
     "Medida Task",
